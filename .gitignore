@@ -3,3 +3,4 @@
 */models/__pycache__/*
 */data_utils/__pycache__/*
 */build/*
+*/Pointnet2_base/*
