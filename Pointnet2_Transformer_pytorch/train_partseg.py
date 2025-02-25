@@ -52,7 +52,7 @@ def parse_args():
     parser = argparse.ArgumentParser('Model')
     parser.add_argument('--model', type=str, default='pointnet2_part_seg_msg', help='model name')
     parser.add_argument('--batch_size', type=int, default=3, help='batch Size during training')
-    parser.add_argument('--epoch', default=10, type=int, help='epoch to run')
+    parser.add_argument('--epoch', default=500, type=int, help='epoch to run')
     parser.add_argument('--learning_rate', default=0.001, type=float, help='initial learning rate')
     parser.add_argument('--gpu', type=str, default='0', help='specify GPU devices')
     parser.add_argument('--optimizer', type=str, default='Adam', help='Adam or SGD')
@@ -113,8 +113,8 @@ def main(args):
     log_string("The number of training data is: %d" % len(TRAIN_DATASET))
     log_string("The number of test data is: %d" % len(TEST_DATASET))
 
-    num_classes = 1
-    num_part = 3
+    num_classes = 1  # 这个值可能需要调整（如果实际是物体类别数）
+    num_part = 3     # 部件分割的类别数（实际需要的num_classes）
 
     '''MODEL LOADING'''
     MODEL = importlib.import_module(args.model)
@@ -122,7 +122,7 @@ def main(args):
     shutil.copy('models/pointnet2_utils.py', str(exp_dir))
 
     classifier = MODEL.get_model(num_part, normal_channel=args.normal).cuda()
-    criterion = MODEL.get_loss().cuda()
+    criterion = MODEL.get_loss(num_classes=num_part).cuda()  # 关键修复处
     classifier.apply(inplace_relu)
 
     def weights_init(m):

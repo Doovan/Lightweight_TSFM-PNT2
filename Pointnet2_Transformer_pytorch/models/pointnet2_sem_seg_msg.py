@@ -42,12 +42,21 @@ class get_model(nn.Module):
 
 
 class get_loss(nn.Module):
-    def __init__(self):
-        super(get_loss, self).__init__()
-    def forward(self, pred, target, trans_feat, weight):
-        total_loss = F.nll_loss(pred, target, weight=weight)
+    def __init__(self, num_classes=None):  # 添加可选参数
+        super().__init__()
+        self.num_classes = num_classes
+        
+        # 如果需要使用类权重
+        if num_classes is not None:
+            self.class_weights = torch.ones(num_classes)
+            self.class_weights[0] = 0.2  # 示例：背景类权重
 
-        return total_loss
+    def forward(self, pred, target, trans_feat, weight=None):
+        # 优先使用传入的weight，其次使用类权重
+        if weight is None and hasattr(self, 'class_weights'):
+            weight = self.class_weights.to(pred.device)
+        
+        return F.nll_loss(pred, target, weight=weight)
 
 if __name__ == '__main__':
     import  torch
