@@ -1,10 +1,13 @@
 """
 Author: Benny
 Date: Nov 2019
+Modified by: [Your Name]
+Date: [Current Date]
 """
 import argparse
 import os
-from data_utils.ShapeNetDataLoader import PartNormalDataset
+from pathlib import Path
+from data_utils.ShapeNetDataLoader import DealMyDataset  # 修改为你的数据集加载器
 import torch
 import logging
 import sys
@@ -16,16 +19,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
 
-seg_classes = {'Earphone': [16, 17, 18], 'Motorbike': [30, 31, 32, 33, 34, 35], 'Rocket': [41, 42, 43],
-               'Car': [8, 9, 10, 11], 'Laptop': [28, 29], 'Cap': [6, 7], 'Skateboard': [44, 45, 46], 'Mug': [36, 37],
-               'Guitar': [19, 20, 21], 'Bag': [4, 5], 'Lamp': [24, 25, 26, 27], 'Table': [47, 48, 49],
-               'Airplane': [0, 1, 2, 3], 'Pistol': [38, 39, 40], 'Chair': [12, 13, 14, 15], 'Knife': [22, 23]}
-
-seg_label_to_cat = {}  # {0:Airplane, 1:Airplane, ...49:Table}
+# 修改seg_classes与训练代码一致
+seg_classes = {'zhoukong': [0,1,2]}  # 你的新类别定义
+seg_label_to_cat = {}  # {0:zhoukong, 1:zhoukong, 2:zhoukong}
 for cat in seg_classes.keys():
     for label in seg_classes[cat]:
         seg_label_to_cat[label] = cat
-
 
 def to_categorical(y, num_classes):
     """ 1-hot encodes a tensor """
@@ -34,18 +33,16 @@ def to_categorical(y, num_classes):
         return new_y.cuda()
     return new_y
 
-
 def parse_args():
     '''PARAMETERS'''
     parser = argparse.ArgumentParser('PointNet')
-    parser.add_argument('--batch_size', type=int, default=24, help='batch size in testing')
+    parser.add_argument('--batch_size', type=int, default=3, help='batch size in testing')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
     parser.add_argument('--num_point', type=int, default=2048, help='point Number')
     parser.add_argument('--log_dir', type=str, required=True, help='experiment root')
     parser.add_argument('--normal', action='store_true', default=False, help='use normals')
-    parser.add_argument('--num_votes', type=int, default=3, help='aggregate segmentation scores with voting')
+    parser.add_argument('--num_votes', type=int, default=1, help='禁用投票或设置为1')
     return parser.parse_args()
-
 
 def main(args):
     def log_string(str):
@@ -54,34 +51,54 @@ def main(args):
 
     '''HYPER PARAMETER'''
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    experiment_dir = 'log/part_seg/' + args.log_dir
+    
+    '''CREATE DIRS'''
+    experiment_dir = Path('log/part_seg') / args.log_dir
+    experiment_dir.mkdir(parents=True, exist_ok=True)  # 修复路径创建问题
+    
+    # 创建visual目录（如果需要）
+    visual_dir = experiment_dir / 'visual'
+    visual_dir.mkdir(parents=True, exist_ok=True)
 
     '''LOG'''
-    args = parse_args()
     logger = logging.getLogger("Model")
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler = logging.FileHandler('%s/eval.txt' % experiment_dir)
+    
+    # 确保日志目录存在
+    log_file = experiment_dir / 'eval.txt'
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    file_handler = logging.FileHandler(str(log_file))
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     log_string('PARAMETER ...')
-    log_string(args)
+    log_string(str(args))
 
-    root = 'data/shapenetcore_partanno_segmentation_benchmark_v0_normal/'
+    '''DATA LOADING'''
+    TEST_DATASET = DealMyDataset(root="/home/kong-vb/data_set/test_data")
+    testDataLoader = torch.utils.data.DataLoader(
+        TEST_DATASET,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4
+    )
+    log_string(f"The number of test data is: {len(TEST_DATASET)}")
 
-    TEST_DATASET = PartNormalDataset(root=root, npoints=args.num_point, split='test', normal_channel=args.normal)
-    testDataLoader = torch.utils.data.DataLoader(TEST_DATASET, batch_size=args.batch_size, shuffle=False, num_workers=4)
-    log_string("The number of test data is: %d" % len(TEST_DATASET))
-    num_classes = 16
-    num_part = 50
+    '''MODEL CONFIG'''
+    num_classes = 1
+    num_part = 3
 
     '''MODEL LOADING'''
-    model_name = os.listdir(experiment_dir + '/logs')[0].split('.')[0]
+    model_name = 'pointnet2_part_seg_msg'
     MODEL = importlib.import_module(model_name)
     classifier = MODEL.get_model(num_part, normal_channel=args.normal).cuda()
-    checkpoint = torch.load(str(experiment_dir) + '/checkpoints/best_model.pth')
+    
+    checkpoint_path = experiment_dir / 'checkpoints' / 'best_model.pth'
+    checkpoint = torch.load(checkpoint_path)
     classifier.load_state_dict(checkpoint['model_state_dict'])
+    log_string(f"Loaded best model from {checkpoint_path}")
 
     with torch.no_grad():
         test_metrics = {}
@@ -90,56 +107,41 @@ def main(args):
         total_seen_class = [0 for _ in range(num_part)]
         total_correct_class = [0 for _ in range(num_part)]
         shape_ious = {cat: [] for cat in seg_classes.keys()}
-        seg_label_to_cat = {}  # {0:Airplane, 1:Airplane, ...49:Table}
-
-        for cat in seg_classes.keys():
-            for label in seg_classes[cat]:
-                seg_label_to_cat[label] = cat
 
         classifier = classifier.eval()
-        for batch_id, (points, label, target) in tqdm(enumerate(testDataLoader), total=len(testDataLoader),
-                                                      smoothing=0.9):
-            batchsize, num_point, _ = points.size()
+        for batch_id, (points, label, target) in tqdm(enumerate(testDataLoader), 
+                                                     total=len(testDataLoader),
+                                                     smoothing=0.9):
             cur_batch_size, NUM_POINT, _ = points.size()
-            points, label, target = points.float().cuda(), label.long().cuda(), target.long().cuda()
+            points = points.float().cuda()
             points = points.transpose(2, 1)
-            vote_pool = torch.zeros(target.size()[0], target.size()[1], num_part).cuda()
+            label = label.long().cuda()
+            target = target.long().cuda()
 
-            for _ in range(args.num_votes):
-                seg_pred, _ = classifier(points, to_categorical(label, num_classes))
-                vote_pool += seg_pred
+            seg_pred, _ = classifier(points, to_categorical(label, num_classes))
+            cur_pred_val = seg_pred.contiguous().cpu().data.max(2)[1].numpy()
+            target_np = target.cpu().numpy()
 
-            seg_pred = vote_pool / args.num_votes
-            cur_pred_val = seg_pred.cpu().data.numpy()
-            cur_pred_val_logits = cur_pred_val
-            cur_pred_val = np.zeros((cur_batch_size, NUM_POINT)).astype(np.int32)
-            target = target.cpu().data.numpy()
-
-            for i in range(cur_batch_size):
-                cat = seg_label_to_cat[target[i, 0]]
-                logits = cur_pred_val_logits[i, :, :]
-                cur_pred_val[i, :] = np.argmax(logits[:, seg_classes[cat]], 1) + seg_classes[cat][0]
-
-            correct = np.sum(cur_pred_val == target)
+            correct = np.sum(cur_pred_val == target_np)
             total_correct += correct
             total_seen += (cur_batch_size * NUM_POINT)
 
             for l in range(num_part):
-                total_seen_class[l] += np.sum(target == l)
-                total_correct_class[l] += (np.sum((cur_pred_val == l) & (target == l)))
+                total_seen_class[l] += np.sum(target_np == l)
+                total_correct_class[l] += np.sum((cur_pred_val == l) & (target_np == l))
 
             for i in range(cur_batch_size):
                 segp = cur_pred_val[i, :]
-                segl = target[i, :]
+                segl = target_np[i, :]
                 cat = seg_label_to_cat[segl[0]]
-                part_ious = [0.0 for _ in range(len(seg_classes[cat]))]
+                part_ious = []
                 for l in seg_classes[cat]:
-                    if (np.sum(segl == l) == 0) and (
-                            np.sum(segp == l) == 0):  # part is not present, no prediction as well
-                        part_ious[l - seg_classes[cat][0]] = 1.0
+                    if (np.sum(segl == l) == 0) and (np.sum(segp == l) == 0):
+                        iou = 1.0
                     else:
-                        part_ious[l - seg_classes[cat][0]] = np.sum((segl == l) & (segp == l)) / float(
+                        iou = np.sum((segl == l) & (segp == l)) / float(
                             np.sum((segl == l) | (segp == l)))
+                    part_ious.append(iou)
                 shape_ious[cat].append(np.mean(part_ious))
 
         all_shape_ious = []
@@ -148,19 +150,17 @@ def main(args):
                 all_shape_ious.append(iou)
             shape_ious[cat] = np.mean(shape_ious[cat])
         mean_shape_ious = np.mean(list(shape_ious.values()))
+        
         test_metrics['accuracy'] = total_correct / float(total_seen)
         test_metrics['class_avg_accuracy'] = np.mean(
-            np.array(total_correct_class) / np.array(total_seen_class, dtype=np.float))
-        for cat in sorted(shape_ious.keys()):
-            log_string('eval mIoU of %s %f' % (cat + ' ' * (14 - len(cat)), shape_ious[cat]))
+            np.array(total_correct_class) / np.array(total_seen_class, dtype=np.float64))
         test_metrics['class_avg_iou'] = mean_shape_ious
         test_metrics['inctance_avg_iou'] = np.mean(all_shape_ious)
 
-    log_string('Accuracy is: %.5f' % test_metrics['accuracy'])
-    log_string('Class avg accuracy is: %.5f' % test_metrics['class_avg_accuracy'])
-    log_string('Class avg mIOU is: %.5f' % test_metrics['class_avg_iou'])
-    log_string('Inctance avg mIOU is: %.5f' % test_metrics['inctance_avg_iou'])
-
+        log_string('Test Accuracy: %f' % test_metrics['accuracy'])
+        log_string('Class Avg Accuracy: %f' % test_metrics['class_avg_accuracy'])
+        log_string('Class Avg IoU: %f' % test_metrics['class_avg_iou'])
+        log_string('Instance Avg IoU: %f' % test_metrics['inctance_avg_iou'])
 
 if __name__ == '__main__':
     args = parse_args()

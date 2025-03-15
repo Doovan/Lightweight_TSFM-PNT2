@@ -50,7 +50,8 @@ class get_model(nn.Module):
         self.fp3 = PointNetFeaturePropagation(1280+2048, [1024, 512])
         self.fp2 = PointNetFeaturePropagation(320+512, [512, 256])
         self.fp1 = PointNetFeaturePropagation(256+3+1, [128, 128])  # 输入坐标+标签
-
+        # 自动计算并打印参数量
+        self._print_parameters()
     def forward(self, xyz, cls_label):
         B, C, N = xyz.shape
         
@@ -80,6 +81,12 @@ class get_model(nn.Module):
         return seg_logits.permute(0, 2, 1), l3_points  # 仅返回分割结果和特征矩阵
     def get_loss(self):
         return get_loss(num_classes=self.num_classes)  # 正确传递参数
+    def _print_parameters(self):
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"\n[参数统计] 总参数量: {total_params/1e6:.2f}M")
+        print(f"[参数统计] 可训练参数: {trainable_params/1e6:.2f}M")
+        print(f"[参数统计] 非训练参数: {(total_params-trainable_params)/1e6:.2f}M\n")
 
 class get_loss(nn.Module):
     def __init__(self, num_classes, alpha=0.7, mat_diff_loss_scale=0.001):  # 添加正则化系数参数
